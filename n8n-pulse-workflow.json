@@ -1,0 +1,483 @@
+{
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "Webhook (App Pulse)",
+      "type": "n8n-nodes-base.webhook",
+      "position": [0, 0],
+      "parameters": {
+        "path": "pulse-generate",
+        "httpMethod": "POST",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "set-cache-key",
+      "name": "Set Cache Key",
+      "type": "n8n-nodes-base.set",
+      "position": [220, 0],
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "cacheKey",
+              "value": "={{ $json.body.country || 'FR' }}_{{ $json.body.topic || 'tendances' }}_{{ $json.body.timeframe || '24h' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "supabase-check-cache",
+      "name": "Supabase - Check Cache",
+      "type": "n8n-nodes-base.supabase",
+      "position": [440, 0],
+      "parameters": {
+        "operation": "getAll",
+        "table": "cache_tendances",
+        "limit": 1,
+        "match": {
+          "matchValues": [
+            {
+              "key": "cle_recherche",
+              "value": "={{ $json.cacheKey }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase Account"
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "if-cache-valid",
+      "name": "IF Cache Valid?",
+      "type": "n8n-nodes-base.if",
+      "position": [660, 0],
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.cle_recherche }}",
+              "operation": "isNotEmpty"
+            }
+          ],
+          "dateTime": [
+            {
+              "value1": "={{ $json.expire_le }}",
+              "operation": "after",
+              "value2": "={{ new Date().toISOString() }}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "set-cached-data",
+      "name": "Set Cached Data",
+      "type": "n8n-nodes-base.set",
+      "position": [900, -120],
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "trendsData",
+              "value": "={{ JSON.stringify($json.resultat) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "apify-start",
+      "name": "Apify - Scrape Trends",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 120],
+      "parameters": {
+        "url": "https://api.apify.com/v2/acts/clockworks~tiktok-scraper/runs?token=YOUR_APIFY_TOKEN",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"searchQueries\": [\"{{ $('Webhook (App Pulse)').item.json.body.topic || 'tendances' }}\"],\n  \"resultsPerPage\": 5,\n  \"proxyCountryCode\": \"None\"\n}",
+        "options": {}
+      },
+      "typeVersion": 4.1
+    },
+    {
+      "id": "wait-node",
+      "name": "Wait for Scraping",
+      "type": "n8n-nodes-base.wait",
+      "position": [1120, 120],
+      "parameters": {
+        "amount": 15,
+        "unit": "seconds"
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "apify-results",
+      "name": "Apify - Get Results",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1340, 120],
+      "parameters": {
+        "url": "https://api.apify.com/v2/acts/clockworks~tiktok-scraper/runs/last/dataset/items?token=YOUR_APIFY_TOKEN",
+        "method": "GET",
+        "options": {}
+      },
+      "typeVersion": 4.1
+    },
+    {
+      "id": "supabase-save-cache",
+      "name": "Supabase - Save Cache",
+      "type": "n8n-nodes-base.supabase",
+      "position": [1560, 120],
+      "parameters": {
+        "operation": "upsert",
+        "table": "cache_tendances",
+        "dataMode": "define",
+        "values": {
+          "value": [
+            {
+              "name": "cle_recherche",
+              "value": "={{ $('Set Cache Key').item.json.cacheKey }}"
+            },
+            {
+              "name": "resultat",
+              "value": "={{ $json }}"
+            },
+            {
+              "name": "expire_le",
+              "value": "={{ new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase Account"
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "set-fresh-data",
+      "name": "Set Fresh Data",
+      "type": "n8n-nodes-base.set",
+      "position": [1780, 120],
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "trendsData",
+              "value": "={{ JSON.stringify($('Apify - Get Results').item.json) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "groq-ai",
+      "name": "Groq - Generate Script & Prompt",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2000, 0],
+      "parameters": {
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"llama3-70b-8192\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Tu es un expert en création de contenu viral. Analyse les données de tendances et crée un script vidéo ultra-engageant, AINSI qu'un prompt en anglais pour un générateur de vidéo IA (type Veo3/Sora).\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Voici les données de tendances sur le sujet '{{ $('Webhook (App Pulse)').item.json.body.topic }}' : {{ $json.trendsData }}. \\n\\nGénère un JSON avec :\\n1. hook (texte)\\n2. body (texte)\\n3. cta (texte)\\n4. video_prompt (Prompt très détaillé en anglais décrivant visuellement la scène pour l'IA vidéo, ex: 'Cinematic vertical shot of a modern office, neon lights, dynamic motion...').\"\n    }\n  ],\n  \"response_format\": { \"type\": \"json_object\" }\n}",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_GROQ_CREDENTIAL_ID",
+          "name": "Groq API Key"
+        }
+      },
+      "typeVersion": 4.1
+    },
+    {
+      "id": "fal-submit",
+      "name": "Fal AI - Submit Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2220, 0],
+      "parameters": {
+        "url": "https://queue.fal.run/fal-ai/veo3",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"prompt\": \"{{ JSON.parse($json.choices[0].message.content).video_prompt }}\",\n  \"aspect_ratio\": \"9:16\"\n}",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_FAL_CREDENTIAL_ID",
+          "name": "Fal API Key"
+        }
+      },
+      "typeVersion": 4.1
+    },
+    {
+      "id": "wait-video",
+      "name": "Wait for Video",
+      "type": "n8n-nodes-base.wait",
+      "position": [2440, 0],
+      "parameters": {
+        "amount": 1,
+        "unit": "minutes"
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "fal-retrieve",
+      "name": "Fal AI - Get Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2660, 0],
+      "parameters": {
+        "url": "={{ $('Fal AI - Submit Video').item.json.response_url }}",
+        "method": "GET",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_FAL_CREDENTIAL_ID",
+          "name": "Fal API Key"
+        }
+      },
+      "typeVersion": 4.1
+    },
+    {
+      "id": "supabase-save",
+      "name": "Supabase - Save Final Result",
+      "type": "n8n-nodes-base.supabase",
+      "position": [2880, 0],
+      "parameters": {
+        "operation": "insert",
+        "table": "generations",
+        "dataMode": "define",
+        "values": {
+          "value": [
+            {
+              "name": "topic",
+              "value": "={{ $('Webhook (App Pulse)').item.json.body.topic }}"
+            },
+            {
+              "name": "script_data",
+              "value": "={{ $('Groq - Generate Script & Prompt').item.json.choices[0].message.content }}"
+            },
+            {
+              "name": "video_url",
+              "value": "={{ $json.video.url }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase Account"
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "sticky-note-instructions",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [0, -350],
+      "parameters": {
+        "content": "## Pulse Backend Workflow (Cache + LLM + Video Gen)\n\n1. **Webhook** : Reçoit la requête (topic).\n2. **Cache System** : Vérifie si les tendances existent déjà pour ce topic (évite de repayer Apify).\n3. **Apify** : Scrape les tendances si le cache est vide ou expiré.\n4. **Groq (LLaMA 3)** : **Appelé à CHAQUE FOIS**. Il prend les données (du cache ou fraîches) et génère un NOUVEAU script + un NOUVEAU prompt vidéo en anglais.\n5. **Fal AI (Veo3)** : Reçoit le prompt généré par Groq, lance la génération de la vidéo, et attend le résultat.\n6. **Supabase** : Sauvegarde le script ET l'URL de la vidéo finale générée.\n\n**Prérequis :**\n- Credentials Apify, Groq, Fal AI, et Supabase.",
+        "height": 350,
+        "width": 800,
+        "color": 6
+      },
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "Webhook (App Pulse)": {
+      "main": [
+        [
+          {
+            "node": "Set Cache Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Cache Key": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Check Cache",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Check Cache": {
+      "main": [
+        [
+          {
+            "node": "IF Cache Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Cache Valid?": {
+      "main": [
+        [
+          {
+            "node": "Set Cached Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Apify - Scrape Trends",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Cached Data": {
+      "main": [
+        [
+          {
+            "node": "Groq - Generate Script & Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apify - Scrape Trends": {
+      "main": [
+        [
+          {
+            "node": "Wait for Scraping",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Scraping": {
+      "main": [
+        [
+          {
+            "node": "Apify - Get Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apify - Get Results": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Save Cache",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Save Cache": {
+      "main": [
+        [
+          {
+            "node": "Set Fresh Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Fresh Data": {
+      "main": [
+        [
+          {
+            "node": "Groq - Generate Script & Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq - Generate Script & Prompt": {
+      "main": [
+        [
+          {
+            "node": "Fal AI - Submit Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fal AI - Submit Video": {
+      "main": [
+        [
+          {
+            "node": "Wait for Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Video": {
+      "main": [
+        [
+          {             
+            "node": "Fal AI - Get Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fal AI - Get Video": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Save Final Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
